@@ -1,0 +1,210 @@
+
+addToDatabase("towel",1,"towel","database/path/","path/to/towel_1.obj","path/to/cameras.mb");
+
+proc addToDatabase(string $garmentType, int $garmentNumber, string $mesh, string $rootFile, string $objFile, string $cameraSceneFile){
+    
+    // Setup Cameras
+    file -f -new;
+    file -f -options "v=0;"  -typ "mayaBinary" -o ($cameraSceneFile);
+    
+    // Import Object File
+    file -import -type "OBJ" -options "mo=1" ($objFile);
+    
+    // variables used for creating saveFile name
+    sysFile -makeDir ($rootFile + $garmentType);
+    $rootFile = $rootFile + $garmentType + "/";
+    
+    sysFile -makeDir ($rootFile + $garmentType + $garmentNumber);
+    $rootFile = $rootFile + $garmentType + $garmentNumber + "/";
+    
+    //***** Scale our model *****
+    float $bounds[] = `polyEvaluate -b $mesh`;
+
+    // Sweater Bounds, we will scale everything to be the same dimensions as our sweater
+    float $maxBoundX = 2; //sweater bound is about 3.8
+    float $maxBoundY = 2; //sweater bound is about 2
+    float $maxBoundZ = 2; //sweater bound is about 1
+
+    float $modelX = $bounds[1] - $bounds[0];
+    float $modelY = $bounds[3] - $bounds[2];
+    float $modelZ = $bounds[5] - $bounds[4];
+
+    float $ratioX = $modelX / $maxBoundX;
+    float $ratioY = $modelY / $maxBoundY;
+    float $ratioZ = $modelZ / $maxBoundZ;
+
+    float $ratioMax = $ratioX;
+    if($ratioY > $ratioMax){
+        $ratioMax = $ratioY;
+    }
+    if($ratioZ > $ratioMax){
+        $ratioMax = $ratioZ;
+    }
+    select -r $mesh;
+    scale -r (1/$ratioMax) (1/$ratioMax) (1/$ratioMax);
+
+    // ***** Create nCloth *****
+    select -r ($mesh);
+    createNCloth 0;
+    
+    // ****** Set T-Shirt Preset ******
+    setAttr "nClothShape1.collideStrength" 1.0;
+    setAttr "nClothShape1.collisionLayer" 0;
+    
+    setAttr "nClothShape1.thickness" 0.01;
+    setAttr "nClothShape1.selfCollideWidthScale" 4.0;
+    
+    setAttr "nClothShape1.bounce" 0.0;
+    setAttr "nClothShape1.friction" 0.3;
+    setAttr "nClothShape1.stickiness" 0.1;
+    
+    setAttr "nClothShape1.stretchResistance" 35;
+    setAttr "nClothShape1.compressionResistance" 10;
+    setAttr "nClothShape1.bendResistance" 0.1;
+    setAttr "nClothShape1.bendAngleDropoff" 0.4;
+    setAttr "nClothShape1.shearResistance" 0.0;
+    
+    setAttr "nClothShape1.restitutionAngle" 360;
+    setAttr "nClothShape1.restitutionTension" 1000;
+    
+    setAttr "nClothShape1.pointMass" 0.6;
+    setAttr "nClothShape1.lift" 0.05;
+    setAttr "nClothShape1.drag" 0.05;
+    setAttr "nClothShape1.tangentialDrag" 0.1;
+    setAttr "nClothShape1.damp" 0.8;
+    setAttr "nClothShape1.stretchDamp" 0.1;
+    
+    // File to write 3D coordinates
+    string $textFileName = ($rootFile+"coordinates.txt");
+    sysFile -delete ($textFileName);
+    float $vtxZeroCoords[] = `pointPosition ($mesh+".vtx[0]")`;
+    
+    // ***** Vertex Selection *****
+    int $numUVs[] = `polyEvaluate -uv $mesh`;
+    int $vertexNumber = 1;
+    float $minDistance2 = 100;
+    int $minUV = 0;
+    float $minUVx;
+    float $minUVy;
+    
+    // **** MAKE SURE YOU HAVE CORRECT DENSITY
+    float $density = 12;
+
+    float $yStepSize = 1/$density;
+    float $xStepSize = 1/$density;
+
+    float $x = 0;
+    float $y = 0;
+    for($i=1; $i < $density; $i++){
+        for($j=1; $j < $density; $j++){
+            $x = $i/$density;
+            $y = $j/$density;
+        
+            // Find the closest vertex
+            for($k = 0; $k < $numUVs[0]; $k++){
+                float $uv[] = `polyEditUV -query -u ($mesh+".map["+$k+"]")`;
+                if(($uv[0]-$x)*($uv[0]-$x) + ($uv[1]-$y)*($uv[1]-$y) < $minDistance2){
+                   $minUV = $k;
+                   $minUVx = $uv[0];
+                   $minUVy = $uv[1];
+                   $minDistance2 = ($uv[0]-$x)*($uv[0]-$x) + ($uv[1]-$y)*($uv[1]-$y);
+                } 
+            }
+        
+            // Check if the closest vertex is close enough 
+            if(abs($x - $minUVx) <= $xStepSize/2 && abs($y - $minUVy) <= $yStepSize/2){
+                // Invert the UV coordinates
+                string $vert[] = `polyListComponentConversion -fuv -tv ($mesh+".map["+$minUV+"]")`;
+                float $vtxCoords[] = `pointPosition $vert[0]`;
+                select -r $vert[0];
+                string $constraint[] = `createNConstraint transform 0`;
+            
+                // ***** Run the cloths simulation *****
+                string $saveFilePath = $rootFile;  
+                runSimulation($mesh, "dynamicConstraint1", ($saveFilePath+"vertex"+$vertexNumber+"/"), ($garmentType+$garmentNumber+"vertex"+$vertexNumber+".obj"));
+                
+                // ***** Compute Location of Current Vertex and Output to Coordinate.txt *****
+                $fileId=`fopen $textFileName`;
+                fprint $fileId ($vertexNumber + " " + ($vtxCoords[0]-$vtxZeroCoords[0]) + " " + ($vtxCoords[1]-$vtxZeroCoords[1]) + " " + ($vtxCoords[2]-$vtxZeroCoords[2]) + " \n");
+                fclose $fileId;
+                
+                // Clean up the Constraint    
+                select "dynamicConstraint1";
+                doDelete;
+                
+                $vertexNumber++;
+            }
+            $minDistance2 = 100;
+            $minUV = 0;
+        }
+    }
+    
+}
+
+
+// ***** Do the clothing simulation *****
+proc runSimulation(string $mesh, string $constraint, string $saveFilePath, string $saveFileName){
+    sysFile -makeDir ($saveFilePath);
+    
+    float $centerX = 0;
+    float $centerY = 1;
+    float $centerZ = 0;
+    
+    float $dcX=`getAttr ($constraint+".translateX")`;
+    float $dcY=`getAttr ($constraint+".translateY")`;
+    float $dcZ=`getAttr ($constraint+".translateZ")`;
+ 
+    float $obX=`getAttr ($mesh+".translateX")`;
+    float $obY=`getAttr ($mesh+".translateY")`;
+    float $obZ=`getAttr ($mesh+".translateZ")`;
+ 
+    setAttr ($constraint+".translateX") $centerX;
+    setAttr ($constraint+".translateY") $centerY;
+    setAttr ($constraint+".translateZ") $centerZ;
+ 
+    setAttr ($mesh+".translateX") ($obX-$dcX + $centerX);
+    setAttr ($mesh+".translateY") ($obY-$dcY + $centerY);
+    setAttr ($mesh+".translateZ") ($obZ-$dcZ + $centerZ);
+ 
+    playbackOptions -loop once;
+    playbackOptions -animationStartTime 0sec -animationEndTime 5sec;
+    playbackOptions -minTime 0sec -maxTime  10sec;
+    play -w -f true;
+    
+    select -r ($mesh);
+    duplicate -rr -n "copy";
+    setAttr (($mesh)+".visibility") 0;
+    select -r "copy";
+    polySmooth  -mth 0 -dv 1 -bnr 1 -c 1 -kb 1 -ksb 1 -khe 0 -kt 1 -kmb 1 -suv 1 -peh 0 -sl 1 -dpe 1 -ps 0.1 -ro 1 -ch 1 "copy";
+    
+
+    // For camera render
+    int $startcamera = 1;
+    int $endcamera = 90;
+    
+    int $numRotates = 5;
+    float $degreesRotate = 2;
+    
+    for ($j = 0; $j < $numRotates; $j++)
+    {
+        sysFile -makeDir ($saveFilePath+"rotate"+($j*$degreesRotate));
+        for ($i = $startcamera; $i <= $endcamera; $i++)
+        {   
+            string $camera = "camera" + $i;
+            render -layer depthLayer ($camera);
+            sysFile -rename ($saveFilePath+"rotate"+($j*$degreesRotate)+"/"+($i)+".jpg") ("C:/Users/Baxter/Documents/maya/projects/default/images/tmp/depthLayer/"+$camera+"/cameras.jpg");
+        }
+        rotate -r -os 0 ($degreesRotate) 0 ;
+    }
+               
+    
+    // Save OBJ File
+    select -r "copy";
+    file -force -es -typ "OBJexport" ($saveFilePath + $saveFileName);
+    currentTime 0;
+    
+    // Delete copy
+    select -r "copy";
+    doDelete;
+    setAttr (($mesh)+".visibility") 1;
+}

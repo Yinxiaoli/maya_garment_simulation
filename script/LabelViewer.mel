@@ -1,0 +1,83 @@
+viewLabels("label/folder/path towel1.txt");
+
+proc viewLabels(string $labelFilePath){
+
+    file -f -new;
+    
+    // Read The Data Using fread 
+    $fileId=`fopen ($labelFilePath) "r"`; 
+        
+    string $garmentType2 = strip(`fgetline $fileId`);
+    string $objFile2 = strip(`fgetline $fileId`);
+    string $mesh2 = strip(`fgetline $fileId`);
+                
+    string $nextLine = `fgetline $fileId`;
+    int $indexArray2[] = {};
+    string $labelArray2[] = {};
+    while (size($nextLine) > 0) {
+            
+       string $tokens[];
+       int $numTokens = tokenize($nextLine, $tokens);
+       if($numTokens == 2){
+            $labelArray2[size($labelArray2)] = $tokens[0] ;
+            $indexArray2[size($indexArray2)] = (int)($tokens[1]); 
+       }
+       $nextLine = `fgetline $fileId`;
+    }
+    fclose $fileId; 
+    viewLabelHelper($garmentType2,$mesh2,$objFile2,$indexArray2,$labelArray2);
+}
+
+
+proc viewLabelHelper(string $garmentType, string $mesh, string $objFile, int $indexArray[], string $labelArray[]){
+    //***** Initial Setup *******
+    //***************************
+        
+    // Import Object File
+    file -import -type "OBJ" -options "mo=1" ($objFile);
+    
+    //***** Scale our model *****
+    //***************************
+    float $bounds[] = `polyEvaluate -b $mesh`;
+
+    // Sweater Bounds, we will scale everything to be the same dimensions as our sweater
+    float $maxBoundX = 3; //sweater bound is about 3.8
+    float $maxBoundY = 3; //sweater bound is about 2
+    float $maxBoundZ = 3; //sweater bound is about 1
+
+    float $modelX = $bounds[1] - $bounds[0];
+    float $modelY = $bounds[3] - $bounds[2];
+    float $modelZ = $bounds[5] - $bounds[4];
+
+    float $ratioX = $modelX / $maxBoundX;
+    float $ratioY = $modelY / $maxBoundY;
+    float $ratioZ = $modelZ / $maxBoundZ;
+
+    float $ratioMax = $ratioX;
+    if($ratioY > $ratioMax){
+        $ratioMax = $ratioY;
+    }
+    if($ratioZ > $ratioMax){
+        $ratioMax = $ratioZ;
+    }
+    select -r $mesh;
+    scale -r (1/$ratioMax) (1/$ratioMax) (1/$ratioMax);
+
+    // ** Setup File to write 3D coordinates in **
+    //********************************************
+    float $vtxZeroCoords[] = `pointPosition ($mesh+".vtx[0]")`;
+    
+    // ** Run Simulation on each specified vertex **
+    //**********************************************
+    for($i=0; $i < size($indexArray); $i++){      
+
+        // Compute Location of Current Vertex and Output to Coordinate.txt
+        float $vtxCoords[] = `pointPosition ($mesh+".vtx["+$indexArray[$i]+"]")`;
+        textCurves -f "Arial Black" -t (""+$labelArray[$i]);
+        move -r $vtxCoords[0] $vtxCoords[1] $vtxCoords[2];
+        scale -r 0.009 0.009 0.009;
+    }     
+    for($i=0; $i < size($indexArray); $i++){      
+        select -add ($mesh+".vtx["+$indexArray[$i]+"]");
+    }                     
+}

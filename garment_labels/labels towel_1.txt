@@ -1,0 +1,12 @@
+towel
+towel_1
+towel_1
+l_top 0
+l_middle 4
+l_bottom 1
+c_top 5
+c_middle 8
+c_bottom 6
+r_top 2
+r_middle 7
+r_bottom 3

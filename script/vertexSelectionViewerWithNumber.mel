@@ -1,0 +1,83 @@
+viewVertexSelection("towel_1_Object__0","path/to/towel_1.obj");
+
+
+proc viewVertexSelection(string $mesh, string $objFile){
+    
+    file -f -new;
+    
+    // Import Object File
+    file -import -type "OBJ" -options "mo=1" ($objFile);
+    
+    //***** Scale our model *****
+    float $bounds[] = `polyEvaluate -b $mesh`;
+
+    // Sweater Bounds, we will scale everything to be the same dimensions as our sweater
+    float $maxBoundX = 3; //sweater bound is about 3.8
+    float $maxBoundY = 3; //sweater bound is about 2
+    float $maxBoundZ = 3; //sweater bound is about 1
+
+    float $modelX = $bounds[1] - $bounds[0];
+    float $modelY = $bounds[3] - $bounds[2];
+    float $modelZ = $bounds[5] - $bounds[4];
+
+    float $ratioX = $modelX / $maxBoundX;
+    float $ratioY = $modelY / $maxBoundY;
+    float $ratioZ = $modelZ / $maxBoundZ;
+
+    float $ratioMax = $ratioX;
+    if($ratioY > $ratioMax){
+        $ratioMax = $ratioY;
+    }
+    if($ratioZ > $ratioMax){
+        $ratioMax = $ratioZ;
+    }
+    select -r $mesh;
+    scale -r (1/$ratioMax) (1/$ratioMax) (1/$ratioMax);
+    
+    // ***** Vertex Selection *****
+    int $numUVs[] = `polyEvaluate -uv $mesh`;
+    int $vertexNumber = 1;
+    float $minDistance2 = 100;
+    int $minUV = 0;
+    float $minUVx;
+    float $minUVy;
+
+    float $density = 12;
+
+    float $yStepSize = 1/$density;
+    float $xStepSize = 1/$density;
+
+    float $x = 0;
+    float $y = 0;
+    for($i=1; $i < $density; $i++){
+        for($j=1; $j < $density; $j++){
+            $x = $i/$density;
+            $y = $j/$density;
+        
+            // Find the closest vertex
+            for($k = 0; $k < $numUVs[0]; $k++){
+                float $uv[] = `polyEditUV -query -u ($mesh+".map["+$k+"]")`;
+                if(($uv[0]-$x)*($uv[0]-$x) + ($uv[1]-$y)*($uv[1]-$y) < $minDistance2){
+                   $minUV = $k;
+                   $minUVx = $uv[0];
+                   $minUVy = $uv[1];
+                   $minDistance2 = ($uv[0]-$x)*($uv[0]-$x) + ($uv[1]-$y)*($uv[1]-$y);
+                } 
+            }
+            
+            // Check if the closest vertex is close enough 
+            if(abs($x - $minUVx) <= $xStepSize/2 && abs($y - $minUVy) <= $yStepSize/2){
+                // Invert the UV coordinates
+                string $vert[] = `polyListComponentConversion -fuv -tv ($mesh+".map["+$minUV+"]")`;
+                float $vtxCoords[] = `pointPosition $vert[0]`;
+                textCurves -t (""+$vertexNumber);
+                move -r $vtxCoords[0] $vtxCoords[1] $vtxCoords[2];
+                scale -r 0.009 0.009 0.009;
+                select -add $vert[0];
+                $vertexNumber++;
+            }
+            $minDistance2 = 100;
+            $minUV = 0;
+        }
+    }
+}

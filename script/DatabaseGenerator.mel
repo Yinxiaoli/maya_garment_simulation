@@ -1,0 +1,333 @@
+
+/*
+HOW TO USE
+Call the function generateDatabase() to use this code. 
+This script simulates hanging clothing from many grasping points.
+It will load ALL "label" files from the directory you pass to generateDatabase.
+It will simulate ALL of the garments specified by those label files and add them to the database.
+If you already simulated a garment, remove its "label" file from the directory you pass.
+
+Label files are of the following format...
+CLOTHING_CATEGORY
+NSMR_OF_OBJECTFILE
+NAME_OF_MESH_IN_OBJECTFILE
+LABEL_1_NAME VERTEX_OF_LABEL_1
+LABEL_2_NAME VERTEX_OF_LABEL_2
+LABEL_3_NAME VERTEX_OF_LABEL_3
+.
+.
+.
+
+There are several tunable parameters in this script. 
+$simulationTime will change the length of the simulation. It is time in seconds of the simulation
+
+"nucleus1.subSteps" and "nucleus1.maxCollisionIterations" change the accuracy of the simulation
+
+$maxBoundX, $maxBoundY, $maxBoundZ control the scale of the garment which is important to ensure the garment
+fits completely into all of the depth image camera views. 
+*/
+generateDatabase(".../DatabaseLabels/", ".../DatabaseObjFiles/", ".../Database_output/");
+
+proc generateDatabase(string $labelDirectory, string $objDirectory, string $databaseDirectory){
+
+    string $labelFileList[] = `getFileList -folder $labelDirectory`;
+    
+    for($i=0; $i < size($labelFileList); $i++){
+         // Read The Data Using fread 
+        $fileId=`fopen ($labelDirectory + $labelFileList[$i]) "r"`; 
+        
+        string $garmentTypeName = strip(`fgetline $fileId`);
+        string $objFileName = strip(`fgetline $fileId`);
+        string $objFileDirName = $objDirectory + $objFileName + ".obj";
+        string $meshName = strip(`fgetline $fileId`);
+                
+        string $nextLine = `fgetline $fileId`;
+        int $idxArray[] = {};
+        string $labelsArray[] = {};
+        while (size($nextLine) > 0) {
+            
+            string $tokens[];
+            int $numTokens = tokenize($nextLine, $tokens);
+            if($numTokens == 2){
+                $labelsArray[size($labelsArray)] = $tokens[0];
+                $idxArray[size($idxArray)] = (int)($tokens[1]); 
+            }
+            $nextLine = `fgetline $fileId`;
+        }
+        fclose $fileId; 
+
+        $isAlreadyInDatabase = `filetest -e ($databaseDirectory+$garmentTypeName+"/"+$objFileName)`;
+        if(!$isAlreadyInDatabase) addObjToDatabase($databaseDirectory,$garmentTypeName,$meshName,$objFileDirName,$objFileName,$idxArray,$labelsArray);
+    }
+}
+
+/*
+Function that adds an obj file to the database
+
+$garmentType = garment category (for example, "longsleeveshirt", "tshirt"
+$mesh = name of the mesh in the obj file
+$objDir = directory of the obj file (for example ".../towel.obj")
+$objFile = name of object file (for example "towel1")
+$indexArray[] = array of indices that will be used for simulation\
+$labelArray[] = array of cooresponding labels for the indices
+*/
+proc addObjToDatabase(string $databaseDir, string $garmentType, string $mesh, string $objDir, string $objFile, int $indexArray[], string $labelArray[]){
+    //***** Initial Setup *******
+    //***************************
+    
+    // Rootfile of database. Everything will be saved inside of this directory
+    string $rootFile = $databaseDir;
+     
+    // The camera scene file used to take images
+    string $cameraSceneFile = "...Cameras/cameras.mb";
+        
+    // Setup Cameras
+    file -f -new;
+    file -f -options "v=0;"  -typ "mayaBinary" -o ($cameraSceneFile);
+    
+    // Import Object File
+    file -import -type "OBJ" -options "mo=1" ($objDir);
+    
+    // variables used for creating saveFile name
+    sysFile -makeDir ($rootFile + $garmentType);
+    $rootFile = $rootFile + $garmentType + "/";
+    
+
+    sysFile -makeDir ($rootFile + $objFile);
+    $rootFile = $rootFile + $objFile + "/";
+
+    //***** Scale our model *****
+    //***************************
+    float $bounds[] = `polyEvaluate -b $mesh`;
+
+    // Sweater Bounds, we will scale everything to be the same dimensions as our sweater
+    float $maxBoundX = 3; //our original sweater is bounded by about 3.8
+    float $maxBoundY = 3; //our original sweater is bounded by about 2
+    float $maxBoundZ = 3; //our original sweater is bounded by about 1
+
+    float $modelX = $bounds[1] - $bounds[0];
+    float $modelY = $bounds[3] - $bounds[2];
+    float $modelZ = $bounds[5] - $bounds[4];
+
+    float $ratioX = $modelX / $maxBoundX;
+    float $ratioY = $modelY / $maxBoundY;
+    float $ratioZ = $modelZ / $maxBoundZ;
+
+    float $ratioMax = $ratioX;
+    if($ratioY > $ratioMax){
+        $ratioMax = $ratioY;
+    }
+    if($ratioZ > $ratioMax){
+        $ratioMax = $ratioZ;
+    }
+    select -r $mesh;
+    scale -r (1/$ratioMax) (1/$ratioMax) (1/$ratioMax);
+
+    // ***** Create nCloth *****
+    //***************************
+    select -r ($mesh);
+    createNCloth 0;
+    
+    // Set some simulation parameters for the nCLoth
+    setAttr "nucleus1.gravity" 8;
+    setAttr "nucleus1.subSteps" 4;
+    setAttr "nucleus1.maxCollisionIterations" 1;
+    
+    // ** Setup File to write 3D coordinates in **
+    //********************************************
+    string $textFileName = ($rootFile+"coordinates.txt");
+    sysFile -delete ($textFileName);
+    float $vtxZeroCoords[] = `pointPosition ($mesh+".vtx[0]")`;
+    
+    // ** Run Simulation on each specified vertex **
+    //**********************************************
+    for($i=0; $i < size($indexArray); $i++){      
+        
+        // Setup our constraint
+        select -r ($mesh+".vtx["+$indexArray[$i]+"]");
+        string $constraint[] = `createNConstraint transform 0`;
+            
+        // Create subfolder to store simulation results on the specific cloth types
+        //sysFile -makeDir ($rootFile + "Denim");
+        //string $saveFilePath_Denim = $rootFile + "Denim" + "/";
+        sysFile -makeDir ($rootFile + "Silk");
+        string $saveFilePath_Silk = $rootFile + "Silk" + "/";
+        sysFile -makeDir ($rootFile + "Cotton");
+        string $saveFilePath_Cotton = $rootFile + "Cotton" + "/";
+        //sysFile -makeDir ($rootFile + "Wool");
+        //string $saveFilePath_Wool = $rootFile + "Wool" + "/";
+        //sysFile -makeDir ($rootFile + "Leather");
+        //string $saveFilePath_Leather = $rootFile + "Leather" + "/";
+       
+        //applyPresetToNode "|nCloth1|nClothShape1" "" "" "C:/Program Files/Autodesk/Maya2014/presets/attrPresets/nCloth/heavyDenim.mel" 1; 
+        //runSimulation($mesh, "dynamicConstraint1", ($saveFilePath_Denim + $labelArray[$i] + "/"), ($objFile+"_"+$labelArray[$i]));
+        
+        applyPresetToNode "|nCloth1|nClothShape1" "" "" "C:/Program Files/Autodesk/Maya2014/presets/attrPresets/nCloth/silk.mel" 1;
+        runSimulation($mesh, "dynamicConstraint1", ($saveFilePath_Silk + $labelArray[$i] + "/"), ($objFile+"_"+$labelArray[$i]), $indexArray[$i]);
+        
+        applyPresetToNode "|nCloth1|nClothShape1" "" "" "C:/Program Files/Autodesk/Maya2014/presets/attrPresets/nCloth/tshirt.mel" 1;
+        runSimulation($mesh, "dynamicConstraint1", ($saveFilePath_Cotton + $labelArray[$i] + "/"), ($objFile+"_"+$labelArray[$i]), $indexArray[$i]);
+        
+        //applyPresetToNode "|nCloth1|nClothShape1" "" "" "C:/Program Files/Autodesk/Maya2014/presets/attrPresets/nCloth/looseThickKnit.mel" 1;
+        //runSimulation($mesh, "dynamicConstraint1", ($saveFilePath_Wool + $labelArray[$i] + "/"), ($objFile+"_"+$labelArray[$i]));
+        
+        //applyPresetToNode "|nCloth1|nClothShape1" "" "" "C:/Program Files/Autodesk/Maya2014/presets/attrPresets/nCloth/thickLeather.mel" 1;
+        //runSimulation($mesh, "dynamicConstraint1", ($saveFilePath_Leather + $labelArray[$i] + "/"), ($objFile+"_"+$labelArray[$i]), $indexArray[$i]);
+        
+        // Compute Location of Current Vertex and Output to Coordinate.txt
+        float $vtxCoords[] = `pointPosition ($mesh+".vtx["+$indexArray[$i]+"]")`;
+        $fileId=`fopen $textFileName`;
+        fprint $fileId ("Label: " + $labelArray[$i] + " VertexNumber: " + $indexArray[$i] + " Coordinates: " + ($vtxCoords[0]-$vtxZeroCoords[0]) + " " + ($vtxCoords[1]-$vtxZeroCoords[1]) + " " + ($vtxCoords[2]-$vtxZeroCoords[2]) + " \n");
+        fclose $fileId;
+                
+        // Clean up constraint 
+        select "dynamicConstraint1";
+        doDelete;
+    }                    
+}
+
+
+// ***** Do the clothing simulation *****
+proc runSimulation(string $mesh, string $constraint, string $saveFilePath, string $saveFileName, int $graspIndex){
+    $simulationTime = 10sec;
+    
+    sysFile -makeDir ($saveFilePath);
+    
+    float $centerX = 0;
+    float $centerY = 1;
+    float $centerZ = 0;
+    
+    float $dcX=`getAttr ($constraint+".translateX")`;
+    float $dcY=`getAttr ($constraint+".translateY")`;
+    float $dcZ=`getAttr ($constraint+".translateZ")`;
+ 
+    float $obX=`getAttr ($mesh+".translateX")`;
+    float $obY=`getAttr ($mesh+".translateY")`;
+    float $obZ=`getAttr ($mesh+".translateZ")`;
+ 
+    setAttr ($constraint+".translateX") $centerX;
+    setAttr ($constraint+".translateY") $centerY;
+    setAttr ($constraint+".translateZ") $centerZ;
+ 
+    setAttr ($mesh+".translateX") ($obX-$dcX + $centerX);
+    setAttr ($mesh+".translateY") ($obY-$dcY + $centerY);
+    setAttr ($mesh+".translateZ") ($obZ-$dcZ + $centerZ);
+    
+    playbackOptions -loop once;
+    playbackOptions -animationStartTime 0sec -animationEndTime $simulationTime;
+    playbackOptions -minTime 0sec -maxTime $simulationTime;
+    play -w -f true;
+    
+    select -r ($mesh);
+    duplicate -rr -n "copy";
+    setAttr (($mesh)+".visibility") 0;
+    
+    // Delete grasping vertex (usually causes a giant spike in the results of the simulation. Deleting it smoothes things out)
+    //select -r ("copy"+".vtx["+$graspIndex+"]");
+    //DeletePolyElements
+    moveVertToAvg("copy", $graspIndex);
+    
+   
+    // Smooth out the mesh copy (we will save this copy, we make a copy so that we can alter it without changing the original mesh which will be used in further simulations)
+    select -r "copy";
+    polySmooth  -mth 0 -dv 1 -bnr 1 -c 1 -kb 1 -ksb 1 -khe 0 -kt 1 -kmb 1 -suv 1 -peh 0 -sl 1 -dpe 1 -ps 0.1 -ro 1 -ch 1 "copy";
+    
+    // Move mesh to 0,1,0 before saving and taking images
+    float $graspPointPos[] = `pointPosition ("copy"+".vtx[" + $graspIndex + "]")`;
+ 
+    float $obX=`getAttr ("copy"+".translateX")`;
+    float $obY=`getAttr ("copy"+".translateY")`;
+    float $obZ=`getAttr ("copy"+".translateZ")`;
+    
+    setAttr ("copy"+".translateX") ($obX-$graspPointPos[0] + 0);
+    setAttr ("copy"+".translateY") ($obY-$graspPointPos[1] + 1);
+    setAttr ("copy"+".translateZ") ($obZ-$graspPointPos[2] + 0);
+    
+    // For camera render
+    int $startcamera = 1;
+    int $endcamera = 90;
+    
+    int $numRotates = 1;
+    float $degreesRotate = 2;
+    
+    for ($j = 0; $j < $numRotates; $j++)
+    {
+        sysFile -makeDir ($saveFilePath+"DepthImgs_"+$saveFileName+"_"+($j*$degreesRotate));
+        $saveFilePath_Images = $saveFilePath+"DepthImgs_"+$saveFileName+"_"+($j*$degreesRotate)+"/";
+        for ($i = $startcamera; $i <= $endcamera; $i++)
+        {   
+            string $camera = "camera" + $i;
+            render -x 900 -y 1600 -layer depthLayer ($camera);
+            sysFile -rename ($saveFilePath_Images+($i)+".jpg") (".../maya/projects/default/images/tmp/depthLayer/"+$camera+"/cameras.jpg");
+        }
+        rotate -r -os 0 ($degreesRotate) 0 ;
+    }
+
+    // Save OBJ File
+    select -r "copy";
+    file -force -es -typ "OBJexport" ($saveFilePath + $saveFileName + ".obj");
+    
+    // Save triangulated mesh
+    select -r "copy";
+    polyTriangulate -ch 1 "copy";
+    file -force -es -typ "OBJexport" ($saveFilePath + $saveFileName + "_triangulatedMesh.obj");
+    
+    currentTime 0;
+    
+    // Delete copy
+    select -r "copy";
+    doDelete;
+    setAttr (($mesh)+".visibility") 1;
+}
+
+
+// ***** Move Vertex to Average Position of its Adjacent Vertices *****
+proc moveVertToAvg(string $mesh, string $vertexNumInt){
+    string $vertexNum = "" + $vertexNumInt;
+
+    string $allAdjVerts[];
+    string $adjVerts[];
+    int $numAdjVerts = 0;
+
+    select -r ($mesh + ".vtx[" + $vertexNum + "]");
+    string $adjEdges[] = `polyInfo -ve`;
+
+    string $adjEdgeList[];
+    $numTokens = tokenize($adjEdges[0], $adjEdgeList);
+
+    for($i=2; $i < size($adjEdgeList); $i++){
+        select -r ($mesh + ".e[" + $adjEdgeList[$i] + "]");
+        string $adjVerts[] = `polyInfo -ev`;
+    
+        string $adjVertList[];
+        $numTokens = tokenize($adjVerts[0], $adjVertList);
+    
+        if($adjVertList[2] != $vertexNum){
+            $allAdjVerts[$numAdjVerts] = $adjVertList[2];
+            $numAdjVerts = $numAdjVerts + 1;
+        }
+    
+        if($adjVertList[3] != $vertexNum){
+            $allAdjVerts[$numAdjVerts] = $adjVertList[3];
+            $numAdjVerts = $numAdjVerts + 1;
+        }
+    
+        clear($adjVerts);
+    }
+
+    float $avgPosAdjVerts[];
+    for($i=0; $i < size($allAdjVerts); $i++){
+        float $adjVertPos[] = `pointPosition ($mesh+".vtx[" + $allAdjVerts[$i] + "]")`;
+        $avgPosAdjVerts[0] += $adjVertPos[0] / size($allAdjVerts);
+        $avgPosAdjVerts[1] += $adjVertPos[1] / size($allAdjVerts);
+        $avgPosAdjVerts[2] += $adjVertPos[2] / size($allAdjVerts);
+        clear($adjVertPos);
+    }
+    select -r ($mesh + ".vtx[" + $vertexNum + "]");
+    move -a $avgPosAdjVerts[0] $avgPosAdjVerts[1] $avgPosAdjVerts[2];
+
+    clear($avgPosAdjVerts);
+    clear($allAdjVerts);
+    clear($adjEdgeList);
+    clear($adjVerts);
+}
