@@ -1,7 +1,7 @@
 ## Maya Garment Simulation Scripts
 A set of maya simulation scripts and example to generate training exemplars described in the paper below.
 
-![sample](https://github.com/Yinxiaoli/maya_garment_simulation/blob/master/garments.jpg)
+![sample](https://github.com/Yinxiaoli/maya_garment_simulation/blob/master/garments.jpg =200x152)
 
 More details can be found in this [page](http://www.cs.columbia.edu/~yli/garment_db/)
 
